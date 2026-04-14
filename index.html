@@ -60,7 +60,7 @@
                     RFID 智慧點名系統
                 </h1>
                 <p class="text-slate-400 mt-2 flex items-center gap-2">
-                    <span class="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-sm border border-blue-500/20">v2.4 (Local CSV Mode)</span>
+                    <span class="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-sm border border-blue-500/20">v2.5 (Fixed CSV Parser)</span>
                     <span class="font-medium text-slate-300 ml-2">by 黃信芙</span>
                 </p>
             </div>
@@ -144,7 +144,6 @@
 
     <script>
         const CONFIG = {
-            // 已更新為你的本地檔案名稱
             CSV_URL: '121171075.csv',
             MQTT_TOPIC: 'justRollCall',
             PRIMARY_BROKER: 'wss://broker.emqx.io:8084/mqtt',
@@ -182,23 +181,32 @@
 
         async function fetchStudents() {
             try {
-                // 嘗試抓取與 HTML 同目錄下的 CSV 檔案
                 const res = await fetch(CONFIG.CSV_URL);
                 if (!res.ok) throw new Error('找不到 CSV 檔案');
                 
                 const text = await res.text();
+                // 過濾掉空行
                 const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
                 
+                // 根據上傳檔案內容：序號,RFID tag,學號,姓名
+                // 跳過第一行標題，解析後續資料
                 students = lines.slice(1).map(l => {
-                    const [tag, id, name] = l.split(',').map(s => s.trim());
-                    return { tag, id, name, isPresent: false, time: null };
+                    const cols = l.split(',').map(s => s.trim());
+                    // cols[0] = 序號, cols[1] = RFID tag, cols[2] = 學號, cols[3] = 姓名
+                    return { 
+                        tag: cols[1], 
+                        id: cols[2], 
+                        name: cols[3], 
+                        isPresent: false, 
+                        time: null 
+                    };
                 });
                 
                 renderTable();
                 updateStats();
-                addLog(`成功讀取本地名單: ${CONFIG.CSV_URL}`);
+                addLog(`成功讀取名單，共 ${students.length} 位學生`);
             } catch (e) { 
-                addLog(`名單載入失敗: 請確保 ${CONFIG.CSV_URL} 與網頁放在同一個資料夾`, 'error'); 
+                addLog(`名單載入失敗: 請確保 ${CONFIG.CSV_URL} 已與網頁同步`, 'error'); 
             }
         }
 
@@ -243,13 +251,12 @@
                 });
 
                 mqttClient.on('error', (err) => {
-                    console.error('MQTT Error:', err);
                     if (brokerUrl === CONFIG.PRIMARY_BROKER) {
                         addLog("主線路失敗，嘗試切換備援埠口...", 'error');
                         mqttClient.end();
                         initMQTT(CONFIG.FALLBACK_BROKER);
                     } else {
-                        addLog("連線失敗，請下載檔案至本地或 GitHub 執行。", 'error');
+                        addLog("連線失敗，請檢查網路狀態。", 'error');
                     }
                 });
 
