@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智慧點名系統 · by 黃信芙</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --neon-cyan: #00f5ff;
+    --neon-purple: #b44fff;
+    --neon-green: #00ff88;
+    --neon-orange: #ff6b35;
+    --neon-pink: #ff2d78;
+    --glass-bg: rgba(10, 15, 35, 0.75);
+    --glass-border: rgba(0, 245, 255, 0.18);
+    --dark-bg: #050913;
+    --card-bg: rgba(13, 22, 50, 0.8);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Noto Sans TC', sans-serif;
+    background: var(--dark-bg);
+    color: #e0eaff;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
+    background-size: 50px 50px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Ambient glow orbs */
+  .orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.35;
+    animation: drift 12s ease-in-out infinite alternate;
+  }
+  .orb-1 { width: 600px; height: 600px; background: radial-gradient(circle, #7c3aed, transparent); top: -200px; left: -200px; }
+  .orb-2 { width: 500px; height: 500px; background: radial-gradient(circle, #0e7490, transparent); bottom: -100px; right: -100px; animation-delay: -4s; }
+  .orb-3 { width: 300px; height: 300px; background: radial-gradient(circle, #0d9488, transparent); top: 40%; left: 40%; animation-delay: -8s; }
+
+  @keyframes drift {
+    from { transform: translate(0,0) scale(1); }
+    to   { transform: translate(30px, 20px) scale(1.08); }
+  }
+
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 16px;
+  }
+
+  .glass-strong {
+    background: var(--card-bg);
+    border: 1px solid rgba(0, 245, 255, 0.25);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+
+  .neon-text { color: var(--neon-cyan); text-shadow: 0 0 20px var(--neon-cyan); }
+  .neon-green-text { color: var(--neon-green); text-shadow: 0 0 15px var(--neon-green); }
+  .neon-orange-text { color: var(--neon-orange); text-shadow: 0 0 15px var(--neon-orange); }
+  .neon-pink-text { color: var(--neon-pink); text-shadow: 0 0 15px var(--neon-pink); }
+  .neon-purple-text { color: var(--neon-purple); text-shadow: 0 0 15px var(--neon-purple); }
+
+  .stat-card {
+    position: relative;
+    overflow: hidden;
+    padding: 20px;
+    border-radius: 14px;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .stat-card:hover { transform: translateY(-2px); }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(0,245,255,0.4), rgba(180,79,255,0.2));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .progress-bar-track {
+    height: 8px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--neon-cyan), var(--neon-green));
+    box-shadow: 0 0 10px var(--neon-cyan);
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .student-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border-radius: 10px;
+    transition: all 0.25s ease;
+    border: 1px solid transparent;
+    margin-bottom: 6px;
+    cursor: default;
+  }
+  .student-row:hover { background: rgba(0,245,255,0.06); border-color: rgba(0,245,255,0.15); }
+  .student-row.present { border-left: 3px solid var(--neon-green); }
+  .student-row.absent  { border-left: 3px solid rgba(255,255,255,0.1); }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+  .badge-present { background: rgba(0,255,136,0.15); color: var(--neon-green); border: 1px solid rgba(0,255,136,0.3); }
+  .badge-absent  { background: rgba(255,255,255,0.05); color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+    outline: none;
+    letter-spacing: 0.04em;
+    font-family: 'Noto Sans TC', sans-serif;
+  }
+  .btn:active { transform: scale(0.97); }
+
+  .btn-cyan {
+    background: linear-gradient(135deg, rgba(0,245,255,0.2), rgba(0,245,255,0.1));
+    color: var(--neon-cyan);
+    border: 1px solid rgba(0,245,255,0.4);
+    box-shadow: 0 0 15px rgba(0,245,255,0.1);
+  }
+  .btn-cyan:hover { background: rgba(0,245,255,0.25); box-shadow: 0 0 25px rgba(0,245,255,0.2); }
+
+  .btn-green {
+    background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,255,136,0.1));
+    color: var(--neon-green);
+    border: 1px solid rgba(0,255,136,0.4);
+  }
+  .btn-green:hover { background: rgba(0,255,136,0.25); }
+
+  .btn-orange {
+    background: linear-gradient(135deg, rgba(255,107,53,0.2), rgba(255,107,53,0.1));
+    color: var(--neon-orange);
+    border: 1px solid rgba(255,107,53,0.4);
+  }
+  .btn-orange:hover { background: rgba(255,107,53,0.25); }
+
+  .btn-pink {
+    background: linear-gradient(135deg, rgba(255,45,120,0.2), rgba(255,45,120,0.1));
+    color: var(--neon-pink);
+    border: 1px solid rgba(255,45,120,0.4);
+  }
+  .btn-pink:hover { background: rgba(255,45,120,0.25); }
+
+  .btn-purple {
+    background: linear-gradient(135deg, rgba(180,79,255,0.2), rgba(180,79,255,0.1));
+    color: var(--neon-purple);
+    border: 1px solid rgba(180,79,255,0.4);
+  }
+  .btn-purple:hover { background: rgba(180,79,255,0.25); }
+
+  .input-field {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(0,245,255,0.2);
+    border-radius: 10px;
+    padding: 9px 14px;
+    color: #e0eaff;
+    font-size: 13px;
+    font-family: 'Noto Sans TC', sans-serif;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    width: 100%;
+  }
+  .input-field:focus {
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 0 2px rgba(0,245,255,0.15);
+  }
+  .input-field::placeholder { color: #475569; }
+
+  .log-item {
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    animation: slideIn 0.3s ease;
+  }
+  @keyframes slideIn { from { opacity:0; transform: translateX(-10px); } to { opacity:1; transform: none; } }
+  .log-time { color: #475569; font-size: 11px; white-space: nowrap; font-family: 'Orbitron', monospace; }
+
+  .mqtt-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .mqtt-connected { background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); animation: pulse 2s infinite; }
+  .mqtt-connecting { background: var(--neon-orange); animation: pulse 0.8s infinite; }
+  .mqtt-disconnected { background: #ef4444; }
+
+  @keyframes pulse {
+    0%,100% { opacity:1; } 50% { opacity:0.4; }
+  }
+
+  .scan-flash {
+    animation: flash 0.5s ease;
+  }
+  @keyframes flash {
+    0%   { box-shadow: 0 0 0 rgba(0,255,136,0); }
+    40%  { box-shadow: 0 0 60px rgba(0,255,136,0.6); }
+    100% { box-shadow: 0 0 0 rgba(0,255,136,0); }
+  }
+
+  .title-font { font-family: 'Orbitron', sans-serif; }
+
+  #scan-display {
+    font-family: 'Orbitron', monospace;
+    letter-spacing: 0.15em;
+    font-size: 22px;
+    text-align: center;
+    transition: all 0.3s;
+    min-height: 36px;
+  }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,245,255,0.2); border-radius: 3px; }
+
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 12px;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    background: rgba(0,245,255,0.08);
+    border: 1px solid rgba(0,245,255,0.2);
+    border-radius: 6px;
+    font-size: 11px;
+    color: #94a3b8;
+    font-family: 'Orbitron', monospace;
+    letter-spacing: 0.05em;
+  }
+
+  .relative-z { position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<div class="relative-z" style="min-height:100vh; padding: 20px;">
+
+  <!-- Header -->
+  <header class="glass-strong mb-6 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-4">
+      <div style="width:44px;height:44px;background:linear-gradient(135deg,var(--neon-cyan),var(--neon-purple));border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;">📡</div>
+      <div>
+        <h1 class="title-font neon-text" style="font-size:18px;font-weight:900;letter-spacing:0.08em;">SMART ROLL CALL</h1>
+        <p style="font-size:12px;color:#64748b;">智慧 RFID 點名系統 <span style="color:#475569;">·</span> <span style="color:var(--neon-purple);font-size:11px;">by 黃信芙</span></p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 flex-wrap">
+      <div id="mqtt-status" class="glass px-3 py-2 flex items-center" style="font-size:12px;border-radius:8px;">
+        <span class="mqtt-dot mqtt-connecting" id="mqtt-dot"></span>
+        <span id="mqtt-status-text">連線中...</span>
+      </div>
+      <button id="voice-btn" class="btn btn-purple" onclick="toggleVoice()">🔊 語音開啟</button>
+      <button class="btn btn-cyan" onclick="exportCSV()">⬇ 匯出 CSV</button>
+    </div>
+  </header>
+
+  <!-- Stats Row -->
+  <div class="grid grid-cols-2 gap-4 mb-6" style="grid-template-columns: repeat(4, 1fr);">
+    <div class="stat-card glass-strong">
+      <p class="section-title">總人數</p>
+      <p class="title-font neon-text" id="stat-total" style="font-size:36px;font-weight:900;">0</p>
+      <p style="font-size:12px;color:#475569;margin-top:4px;">已載入名單</p>
+    </div>
+    <div class="stat-card glass-strong">
+      <p class="section-title">出席人數</p>
+      <p class="title-font neon-green-text" id="stat-present" style="font-size:36px;font-weight:900;">0</p>
+      <p style="font-size:12px;color:#475569;margin-top:4px;">已到場</p>
+    </div>
+    <div class="stat-card glass-strong">
+      <p class="section-title">缺席人數</p>
+      <p class="title-font neon-orange-text" id="stat-absent" style="font-size:36px;font-weight:900;">0</p>
+      <p style="font-size:12px;color:#475569;margin-top:4px;">尚未到場</p>
+    </div>
+    <div class="stat-card glass-strong">
+      <p class="section-title">出席率</p>
+      <p class="title-font neon-purple-text" id="stat-rate" style="font-size:36px;font-weight:900;">0%</p>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Grid -->
+  <div class="grid gap-5" style="grid-template-columns: 1fr 340px;">
+
+    <!-- Left: Student List -->
+    <div>
+      <!-- Search + Manual -->
+      <div class="flex gap-3 mb-4 flex-wrap">
+        <div style="flex:1;min-width:160px;position:relative;">
+          <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#475569;">🔍</span>
+          <input type="text" class="input-field" id="search-input" placeholder="搜尋學號或姓名..." style="padding-left:36px;" oninput="filterStudents()">
+        </div>
+        <div class="flex gap-2">
+          <input type="text" class="input-field" id="manual-input" placeholder="學號或姓名手動點名" style="width:180px;">
+          <button class="btn btn-green" onclick="manualCheckIn()">✓ 點名</button>
+        </div>
+      </div>
+
+      <!-- Student List -->
+      <div class="glass-strong p-4" style="max-height:520px;overflow-y:auto;" id="student-list-container">
+        <div class="section-title">學生名單</div>
+        <div id="student-list">
+          <div style="text-align:center;padding:40px;color:#475569;">
+            <div style="font-size:32px;margin-bottom:8px;">📋</div>
+            <p>正在載入名單...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="flex flex-col gap-4">
+
+      <!-- RFID Scanner Display -->
+      <div class="glass-strong p-5 text-center" id="scanner-panel">
+        <p class="section-title" style="text-align:center;">RFID 感應區</p>
+        <div style="margin:12px 0;padding:16px;background:rgba(0,245,255,0.03);border:1px solid rgba(0,245,255,0.1);border-radius:12px;">
+          <div id="scan-display" class="neon-text">等待感應...</div>
+        </div>
+        <div id="scan-result" style="font-size:13px;color:#475569;min-height:20px;"></div>
+        <div id="scan-student" style="font-size:16px;font-weight:600;min-height:24px;margin-top:6px;"></div>
+      </div>
+
+      <!-- MQTT Config -->
+      <div class="glass-strong p-4">
+        <p class="section-title">MQTT 設定</p>
+        <div class="flex flex-col gap-2">
+          <input type="text" class="input-field" id="mqtt-topic" value="justRollCall" placeholder="Topic">
+          <button class="btn btn-cyan" style="width:100%;justify-content:center;" onclick="reconnectMQTT()">🔄 重新連線</button>
+        </div>
+      </div>
+
+      <!-- Google Sheets Config -->
+      <div class="glass-strong p-4">
+        <p class="section-title">名單來源</p>
+        <input type="text" class="input-field mb-2" id="sheet-url" placeholder="Google Sheets CSV 連結" style="font-size:11px;">
+        <button class="btn btn-cyan" style="width:100%;justify-content:center;" onclick="loadSheet()">📥 重新載入名單</button>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="glass-strong p-4 flex-1" style="max-height:300px;display:flex;flex-direction:column;">
+        <div class="flex items-center justify-between mb-3">
+          <p class="section-title" style="margin-bottom:0;">即時動態</p>
+          <button onclick="clearLog()" style="font-size:11px;color:#475569;background:none;border:none;cursor:pointer;">清除</button>
+        </div>
+        <div id="activity-log" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
+          <!-- logs appear here -->
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+let students = [];        // { rfid, id, name, present, time }
+let mqttClient = null;
+let voiceEnabled = false;
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+const DEFAULT_SHEET = 'https://docs.google.com/spreadsheets/d/1zX-O2p9HyNl1bfbjBuMZHqG-kQ33LZxa7NV0_-M0hTA/pub?output=csv';
+const BROKER = 'wss://broker.emqx.io:8084/mqtt';
+
+// ============================================================
+// INIT
+// ============================================================
+window.addEventListener('load', () => {
+  document.getElementById('sheet-url').value = DEFAULT_SHEET;
+  loadSheet();
+  connectMQTT();
+});
+
+// ============================================================
+// GOOGLE SHEETS LOADER
+// ============================================================
+function loadSheet() {
+  const url = document.getElementById('sheet-url').value.trim() || DEFAULT_SHEET;
+  addLog('系統', '正在載入學生名單...', 'info');
+  fetch(url)
+    .then(r => r.text())
+    .then(csv => {
+      parseCSV(csv);
+      addLog('系統', `名單載入完成，共 ${students.length} 位學生`, 'success');
+      updateStats();
+      renderList();
+    })
+    .catch(e => {
+      addLog('系統', '名單載入失敗：' + e.message, 'error');
+      document.getElementById('student-list').innerHTML = `<div style="text-align:center;padding:40px;color:#ef4444;"><div style="font-size:32px;margin-bottom:8px;">⚠️</div><p>名單載入失敗，請確認連結是否公開</p></div>`;
+    });
+}
+
+function parseCSV(csv) {
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return;
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g,'').toLowerCase());
+
+  // Flexible column detection
+  const rfidIdx  = headers.findIndex(h => h.includes('rfid') || h.includes('tag') || h.includes('標籤'));
+  const idIdx    = headers.findIndex(h => h.includes('學號') || h.includes('id') || h.includes('student'));
+  const nameIdx  = headers.findIndex(h => h.includes('姓名') || h.includes('name'));
+
+  if (rfidIdx < 0 || idIdx < 0 || nameIdx < 0) {
+    // Try positional fallback
+    students = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = splitCSVLine(lines[i]);
+      if (cols.length >= 3) {
+        students.push({ rfid: cols[0].trim(), id: cols[1].trim(), name: cols[2].trim(), present: false, time: null });
+      }
+    }
+  } else {
+    students = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = splitCSVLine(lines[i]);
+      if (cols.length <= Math.max(rfidIdx, idIdx, nameIdx)) continue;
+      const rfid = cols[rfidIdx]?.trim() || '';
+      const id   = cols[idIdx]?.trim() || '';
+      const name = cols[nameIdx]?.trim() || '';
+      if (rfid || id || name) students.push({ rfid, id, name, present: false, time: null });
+    }
+  }
+}
+
+function splitCSVLine(line) {
+  const result = [];
+  let cur = '', inQuote = false;
+  for (let ch of line) {
+    if (ch === '"') { inQuote = !inQuote; }
+    else if (ch === ',' && !inQuote) { result.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  result.push(cur);
+  return result;
+}
+
+// ============================================================
+// MQTT
+// ============================================================
+function connectMQTT() {
+  setMqttStatus('connecting');
+  const topic = document.getElementById('mqtt-topic').value.trim() || 'justRollCall';
+
+  if (mqttClient) { try { mqttClient.end(true); } catch(e){} }
+
+  mqttClient = mqtt.connect(BROKER, {
+    clientId: 'rollcall_' + Math.random().toString(16).slice(2, 9),
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 10000,
+  });
+
+  mqttClient.on('connect', () => {
+    setMqttStatus('connected');
+    mqttClient.subscribe(topic, err => {
+      if (!err) addLog('MQTT', `已訂閱 Topic: ${topic}`, 'success');
+      else addLog('MQTT', '訂閱失敗: ' + err.message, 'error');
+    });
+  });
+
+  mqttClient.on('error', e => { addLog('MQTT', '連線錯誤: ' + e.message, 'error'); });
+  mqttClient.on('close', () => { setMqttStatus('disconnected'); addLog('MQTT', '連線已中斷，嘗試重連...', 'warn'); });
+  mqttClient.on('reconnect', () => { setMqttStatus('connecting'); });
+
+  mqttClient.on('message', (t, payload) => {
+    const rfid = payload.toString().trim();
+    handleRFID(rfid);
+  });
+}
+
+function reconnectMQTT() {
+  addLog('MQTT', '手動重新連線...', 'info');
+  connectMQTT();
+}
+
+function setMqttStatus(state) {
+  const dot  = document.getElementById('mqtt-dot');
+  const text = document.getElementById('mqtt-status-text');
+  dot.className = 'mqtt-dot';
+  if (state === 'connected')    { dot.classList.add('mqtt-connected'); text.textContent = '已連線'; text.style.color = 'var(--neon-green)'; }
+  else if (state === 'connecting') { dot.classList.add('mqtt-connecting'); text.textContent = '連線中...'; text.style.color = 'var(--neon-orange)'; }
+  else { dot.classList.add('mqtt-disconnected'); text.textContent = '已斷線'; text.style.color = '#ef4444'; }
+}
+
+// ============================================================
+// RFID PROCESSING
+// ============================================================
+function handleRFID(rfid) {
+  updateScanDisplay(rfid);
+  const student = students.find(s => s.rfid.toUpperCase() === rfid.toUpperCase());
+
+  if (!student) {
+    document.getElementById('scan-result').style.color = 'var(--neon-orange)';
+    document.getElementById('scan-result').textContent = '⚠ 未知標籤';
+    document.getElementById('scan-student').textContent = '';
+    playSound('unknown');
+    addLog('RFID', `未知標籤: ${rfid}`, 'warn');
+    speak('偵測到未知標籤');
+    flashPanel('orange');
+    return;
+  }
+
+  if (student.present) {
+    document.getElementById('scan-result').style.color = 'var(--neon-cyan)';
+    document.getElementById('scan-result').textContent = '🔁 重複點名';
+    document.getElementById('scan-student').textContent = student.name;
+    document.getElementById('scan-student').style.color = 'var(--neon-cyan)';
+    playSound('duplicate');
+    addLog('RFID', `重複點名: ${student.name} (${student.id})`, 'info');
+    speak(`${student.name}，已重複點名`);
+    flashPanel('cyan');
+    return;
+  }
+
+  // Mark present
+  student.present = true;
+  student.time = nowStr();
+  document.getElementById('scan-result').style.color = 'var(--neon-green)';
+  document.getElementById('scan-result').textContent = '✓ 點名成功';
+  document.getElementById('scan-student').textContent = student.name;
+  document.getElementById('scan-student').style.color = 'var(--neon-green)';
+  playSound('success');
+  addLog('RFID', `點名成功: ${student.name} (${student.id})`, 'success');
+  speak(`${student.name}，點名成功`);
+  flashPanel('green');
+  updateStats();
+  renderList();
+}
+
+function updateScanDisplay(rfid) {
+  const el = document.getElementById('scan-display');
+  el.textContent = rfid;
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+}
+
+function flashPanel(color) {
+  const p = document.getElementById('scanner-panel');
+  const colors = { green: 'var(--neon-green)', orange: 'var(--neon-orange)', cyan: 'var(--neon-cyan)' };
+  p.style.boxShadow = `0 0 60px ${colors[color]}44`;
+  setTimeout(() => { p.style.boxShadow = ''; }, 600);
+}
+
+// ============================================================
+// MANUAL CHECK-IN / CANCEL
+// ============================================================
+function manualCheckIn() {
+  const val = document.getElementById('manual-input').value.trim();
+  if (!val) return;
+  const student = students.find(s => s.id === val || s.name === val);
+  if (!student) { addLog('手動', `找不到學生: ${val}`, 'warn'); return; }
+  if (student.present) { addLog('手動', `${student.name} 已出席`, 'info'); return; }
+  student.present = true;
+  student.time = nowStr();
+  addLog('手動', `手動點名: ${student.name} (${student.id})`, 'success');
+  speak(`${student.name}，手動點名成功`);
+  playSound('success');
+  document.getElementById('manual-input').value = '';
+  updateStats();
+  renderList();
+}
+
+function cancelCheckIn(idx) {
+  const student = students[idx];
+  if (!student || !student.present) return;
+  student.present = false;
+  student.time = null;
+  addLog('取消', `取消點名: ${student.name} (${student.id})`, 'warn');
+  updateStats();
+  renderList();
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function renderList(filtered) {
+  const list = filtered || students;
+  const container = document.getElementById('student-list');
+  if (list.length === 0) {
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:#475569;"><p>查無資料</p></div>`;
+    return;
+  }
+
+  container.innerHTML = list.map((s, i) => {
+    const globalIdx = students.indexOf(s);
+    return `
+    <div class="student-row ${s.present ? 'present' : 'absent'}">
+      <div style="flex:1;display:flex;align-items:center;gap:12px;">
+        <div style="width:34px;height:34px;border-radius:50%;background:${s.present ? 'rgba(0,255,136,0.15)' : 'rgba(255,255,255,0.04)'};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">
+          ${s.present ? '✓' : '○'}
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:14px;">${s.name}</div>
+          <div style="font-size:11px;color:#475569;margin-top:2px;">
+            <span class="tag">${s.id}</span>
+            ${s.rfid ? `<span class="tag" style="margin-left:4px;">${s.rfid}</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+        ${s.present ? `<span style="font-size:11px;color:#475569;">${s.time || ''}</span>` : ''}
+        <span class="badge ${s.present ? 'badge-present' : 'badge-absent'}">${s.present ? '出席' : '缺席'}</span>
+        ${s.present ? `<button onclick="cancelCheckIn(${globalIdx})" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 6px;opacity:0.6;" title="取消點名">✕</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterStudents() {
+  const q = document.getElementById('search-input').value.trim().toLowerCase();
+  if (!q) { renderList(); return; }
+  const filtered = students.filter(s => s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
+  renderList(filtered);
+}
+
+function updateStats() {
+  const total   = students.length;
+  const present = students.filter(s => s.present).length;
+  const absent  = total - present;
+  const rate    = total > 0 ? Math.round(present / total * 100) : 0;
+  document.getElementById('stat-total').textContent   = total;
+  document.getElementById('stat-present').textContent = present;
+  document.getElementById('stat-absent').textContent  = absent;
+  document.getElementById('stat-rate').textContent    = rate + '%';
+  document.getElementById('progress-bar').style.width = rate + '%';
+}
+
+// ============================================================
+// ACTIVITY LOG
+// ============================================================
+function addLog(tag, msg, type = 'info') {
+  const log  = document.getElementById('activity-log');
+  const time = nowStr();
+  const colors = { success: 'var(--neon-green)', error: '#ef4444', warn: 'var(--neon-orange)', info: '#64748b', };
+  const color = colors[type] || '#64748b';
+  const icons = { success: '✓', error: '✕', warn: '⚠', info: '●' };
+  const icon  = icons[type] || '●';
+
+  const item = document.createElement('div');
+  item.className = 'log-item';
+  item.style.background = type === 'success' ? 'rgba(0,255,136,0.05)' : type === 'error' ? 'rgba(239,68,68,0.05)' : type === 'warn' ? 'rgba(255,107,53,0.05)' : 'rgba(255,255,255,0.02)';
+  item.innerHTML = `
+    <span style="color:${color};font-size:12px;flex-shrink:0;">${icon}</span>
+    <span style="flex:1;color:#cbd5e1;"><span style="color:${color};font-weight:600;">[${tag}]</span> ${msg}</span>
+    <span class="log-time">${time}</span>
+  `;
+  log.insertBefore(item, log.firstChild);
+  if (log.children.length > 100) log.removeChild(log.lastChild);
+}
+
+function clearLog() {
+  document.getElementById('activity-log').innerHTML = '';
+}
+
+// ============================================================
+// AUDIO
+// ============================================================
+function playSound(type) {
+  try {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'success') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(1100, audioCtx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+    } else if (type === 'duplicate') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(500, audioCtx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+    } else if (type === 'unknown') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(200, audioCtx.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+    }
+  } catch(e) {}
+}
+
+// ============================================================
+// TTS
+// ============================================================
+function speak(text) {
+  if (!voiceEnabled) return;
+  if (!window.speechSynthesis) return;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'zh-TW';
+  utter.rate = 1.0;
+  utter.pitch = 1.0;
+  window.speechSynthesis.speak(utter);
+}
+
+function toggleVoice() {
+  voiceEnabled = !voiceEnabled;
+  const btn = document.getElementById('voice-btn');
+  btn.textContent = voiceEnabled ? '🔊 語音開啟' : '🔇 語音關閉';
+  btn.className = voiceEnabled ? 'btn btn-purple' : 'btn btn-orange';
+  addLog('語音', voiceEnabled ? '語音朗讀已開啟' : '語音朗讀已關閉', voiceEnabled ? 'success' : 'warn');
+}
+
+// ============================================================
+// CSV EXPORT
+// ============================================================
+function exportCSV() {
+  const now = new Date();
+  const ts  = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+  const header = '學號,姓名,狀態,點名時間\n';
+  const rows = students.map(s => `${s.id},${s.name},${s.present ? '出席' : '缺席'},${s.time || ''}`).join('\n');
+  const BOM  = '\uFEFF';
+  const blob = new Blob([BOM + header + rows], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `點名結果_${ts}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  addLog('匯出', `已匯出 CSV 檔案：點名結果_${ts}.csv`, 'success');
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+function nowStr() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+</script>
+</body>
+</html>
